@@ -120,8 +120,78 @@ int main(void)
 
 		if (!fork()) { // this is the child process 
 			close(sockfd); // child doesn't need the listener 
-			if (send(new_fd, "Hello, world!", 13, 0) == -1) 
-				perror("send"); 
+			
+			// Send welcome message
+			char welcome[] = "=== Connected to Chat Server ===\nType your messages and press Enter. Type 'quit' to exit.\n";
+			if (send(new_fd, welcome, strlen(welcome), 0) == -1) {
+				perror("send");
+				close(new_fd);
+				exit(1);
+			}
+			
+			// Chat relay loop - bidirectional communication
+			char buf[1024];
+			ssize_t numbytes;
+			fd_set master_fds, read_fds;
+			int fdmax;
+			
+			FD_ZERO(&master_fds);
+			FD_SET(STDIN_FILENO, &master_fds);
+			FD_SET(new_fd, &master_fds);
+			fdmax = new_fd;
+			
+			printf("Chat session started with %s\n", s);
+			printf("Type messages to send to client (quit to end session):\n");
+			
+			while(1) {
+				read_fds = master_fds;
+				if (select(fdmax + 1, &read_fds, NULL, NULL, NULL) == -1) {
+					perror("select");
+					break;
+				}
+				
+				// Check if client sent data
+				if (FD_ISSET(new_fd, &read_fds)) {
+					numbytes = recv(new_fd, buf, sizeof(buf) - 1, 0);
+					if (numbytes <= 0) {
+						if (numbytes == 0) {
+							printf("Client disconnected\n");
+						} else {
+							perror("recv");
+						}
+						break;
+					}
+					buf[numbytes] = '\0';
+					
+					// Check if client wants to quit
+					if (strncmp(buf, "quit", 4) == 0) {
+						printf("Client ended the chat\n");
+						break;
+					}
+					
+					printf("Client: %s", buf);
+					fflush(stdout);
+				}
+				
+				// Check if server user typed something
+				if (FD_ISSET(STDIN_FILENO, &read_fds)) {
+					if (fgets(buf, sizeof(buf), stdin) != NULL) {
+						// Check if server wants to quit
+						if (strncmp(buf, "quit", 4) == 0) {
+							printf("Ending chat session\n");
+							send(new_fd, "Server has ended the chat.\n", 27, 0);
+							break;
+						}
+						
+						// Send message to client
+						if (send(new_fd, buf, strlen(buf), 0) == -1) {
+							perror("send");
+							break;
+						}
+					}
+				}
+			}
+			
 			close(new_fd); 
 			exit(0); 
 		} 

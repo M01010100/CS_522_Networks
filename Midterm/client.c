@@ -15,7 +15,7 @@
 
 #define PORT "3490" // the port client will be connecting to 
 
-#define MAXDATASIZE 100 // max number of bytes we can get at once 
+#define MAXDATASIZE 1024 // max number of bytes we can get at once 
 
 // get sockaddr, IPv4 or IPv6: 
 void *get_in_addr(struct sockaddr *sa) 
@@ -81,14 +81,67 @@ int main(int argc, char *argv[])
 
 	freeaddrinfo(servinfo); // all done with this structure 
 
+	// Receive welcome message
 	if ((numbytes = recv(sockfd, buf, MAXDATASIZE-1, 0)) == -1) { 
 	    perror("recv"); 
 	    exit(1); 
 	} 
 
 	buf[numbytes] = '\0'; 
+	printf("%s", buf); 
 
-	printf("client: received '%s'\n",buf); 
+	// Chat loop - bidirectional communication
+	fd_set master_fds, read_fds;
+	int fdmax;
+	
+	FD_ZERO(&master_fds);
+	FD_SET(STDIN_FILENO, &master_fds);
+	FD_SET(sockfd, &master_fds);
+	fdmax = sockfd;
+	
+	printf("\n"); // Add newline after welcome message
+	
+	while(1) {
+		read_fds = master_fds;
+		if (select(fdmax + 1, &read_fds, NULL, NULL, NULL) == -1) {
+			perror("select");
+			break;
+		}
+		
+		// Check if server sent data
+		if (FD_ISSET(sockfd, &read_fds)) {
+			numbytes = recv(sockfd, buf, MAXDATASIZE - 1, 0);
+			if (numbytes <= 0) {
+				if (numbytes == 0) {
+					printf("\nServer disconnected\n");
+				} else {
+					perror("recv");
+				}
+				break;
+			}
+			buf[numbytes] = '\0';
+			printf("Server: %s", buf);
+			fflush(stdout);
+		}
+		
+		// Check if user typed something
+		if (FD_ISSET(STDIN_FILENO, &read_fds)) {
+			if (fgets(buf, MAXDATASIZE, stdin) != NULL) {
+				// Check if user wants to quit
+				if (strncmp(buf, "quit", 4) == 0) {
+					printf("Ending chat session\n");
+					send(sockfd, buf, strlen(buf), 0);
+					break;
+				}
+				
+				// Send message to server
+				if (send(sockfd, buf, strlen(buf), 0) == -1) {
+					perror("send");
+					break;
+				}
+			}
+		}
+	}
 
 	close(sockfd); 
 
