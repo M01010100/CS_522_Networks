@@ -107,7 +107,39 @@ int main(int argc, char *argv[])
 	} 
 
 	buf[numbytes] = '\0'; 
-	printf("%s", buf); 
+	printf("%s", buf);
+	
+	// Prompt for username
+	char username[64];
+	printf("Enter your name/identifier: ");
+	fflush(stdout);
+	if (fgets(username, sizeof(username), stdin) == NULL) {
+		fprintf(stderr, "Failed to read username\n");
+		close(sockfd);
+		return 1;
+	}
+	
+	// Remove newline from username
+	username[strcspn(username, "\n")] = '\0';
+	
+	// Send encrypted username to server
+	int username_len = strlen(username);
+	xor_encrypt_decrypt(username, username_len, ENCRYPTION_KEY);
+	if (send(sockfd, username, username_len, 0) == -1) {
+		perror("send username");
+		close(sockfd);
+		return 1;
+	}
+	
+	// Wait for server acknowledgment
+	if ((numbytes = recv(sockfd, buf, MAXDATASIZE-1, 0)) == -1) {
+		perror("recv");
+		close(sockfd);
+		return 1;
+	}
+	buf[numbytes] = '\0';
+	xor_encrypt_decrypt(buf, numbytes, ENCRYPTION_KEY);
+	printf("%s\n", buf); 
 
 	// Chat loop - bidirectional communication
 	fd_set master_fds, read_fds;

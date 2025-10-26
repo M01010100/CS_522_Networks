@@ -31,11 +31,23 @@ Write-Host "Compiling client.c..." -ForegroundColor Yellow
 
 if ($useWSL) {
     # Convert Windows path to WSL path
-    $wslPath = wsl wslpath -a "$PSScriptRoot\client.c"
-    $wslDir = Split-Path $wslPath
+    $wslPath = wsl wslpath -a "$PSScriptRoot\client.c" 2>$null
+    
+    if ([string]::IsNullOrEmpty($wslPath)) {
+        # Fallback: use the script directory directly
+        $wslPath = wsl wslpath "$PSScriptRoot" 2>$null
+        if ([string]::IsNullOrEmpty($wslPath)) {
+            Write-Host "Warning: Could not convert path, using current directory" -ForegroundColor Yellow
+            $wslDir = "."
+        } else {
+            $wslDir = $wslPath
+        }
+    } else {
+        $wslDir = Split-Path $wslPath
+    }
     
     # Compile using WSL
-    wsl bash -c "cd '$wslDir' && gcc -o client client.c -Wall"
+    wsl bash -c "cd '$wslDir' && gcc -o client client.c -Wall" 2>&1 | Where-Object { $_ -notmatch "wslpath" }
     
     if ($LASTEXITCODE -eq 0) {
         Write-Host "Compilation successful!" -ForegroundColor Green

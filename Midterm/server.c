@@ -148,9 +148,34 @@ int main(void)
 				exit(1);
 			}
 			
-			// Chat relay loop - bidirectional communication
+			// Receive username from client
 			char buf[1024];
+			char username[64];
 			ssize_t numbytes;
+			
+			numbytes = recv(new_fd, username, sizeof(username) - 1, 0);
+			if (numbytes <= 0) {
+				printf("Failed to receive username from client\n");
+				close(new_fd);
+				exit(1);
+			}
+			username[numbytes] = '\0';
+			
+			// Decrypt the username
+			xor_encrypt_decrypt(username, numbytes, ENCRYPTION_KEY);
+			
+			// Send acknowledgment with username
+			char ack_msg[128];
+			snprintf(ack_msg, sizeof(ack_msg), "Welcome, %s! You are now connected to the chat server.", username);
+			int ack_len = strlen(ack_msg);
+			xor_encrypt_decrypt(ack_msg, ack_len, ENCRYPTION_KEY);
+			if (send(new_fd, ack_msg, ack_len, 0) == -1) {
+				perror("send acknowledgment");
+				close(new_fd);
+				exit(1);
+			}
+			
+			// Chat relay loop - bidirectional communication
 			fd_set master_fds, read_fds;
 			int fdmax;
 			
@@ -159,8 +184,8 @@ int main(void)
 			FD_SET(new_fd, &master_fds);
 			fdmax = new_fd;
 			
-			printf("Chat session started with %s\n", s);
-			printf("Type messages to send to client (quit to end session):\n");
+			printf("Chat session started with %s (username: %s)\n", s, username);
+			printf("Type messages to send to %s (quit to end session):\n", username);
 			
 			while(1) {
 				read_fds = master_fds;
@@ -174,7 +199,7 @@ int main(void)
 					numbytes = recv(new_fd, buf, sizeof(buf) - 1, 0);
 					if (numbytes <= 0) {
 						if (numbytes == 0) {
-							printf("Client disconnected\n");
+							printf("%s disconnected\n", username);
 						} else {
 							perror("recv");
 						}
@@ -187,7 +212,7 @@ int main(void)
 					
 					// Check if client wants to quit
 					if (strncmp(buf, "quit", 4) == 0) {
-						printf("Client ended the chat\n");
+						printf("%s ended the chat\n", username);
 						break;
 					}
 					
@@ -195,7 +220,7 @@ int main(void)
 					char timestamp[64];
 					get_timestamp(timestamp, sizeof(timestamp));
 					
-					printf("%s Client: %s", timestamp, buf);
+					printf("%s %s: %s", timestamp, username, buf);
 					fflush(stdout);
 				}
 				

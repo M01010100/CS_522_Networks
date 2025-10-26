@@ -7,6 +7,7 @@ A simple bidirectional chat application using TCP sockets in C. This allows real
 
 - **Bidirectional Communication**: Both server and client can send and receive messages simultaneously
 - **Multiple Clients**: Server uses fork() to handle multiple client connections concurrently
+- **User Identification**: Clients provide a username/identifier when connecting
 - **Message Encryption**: XOR-based encryption for secure message transmission
 - **Timestamps**: Each received message is displayed with a timestamp showing when it was received
 - **Simple Terminal Interface**: Type messages directly in the terminal
@@ -22,7 +23,7 @@ A simple bidirectional chat application using TCP sockets in C. This allows real
 
 ## Quick Start
 
-### Option 1: Using PowerShell Scripts (Recommended)
+### Option 1: Using PowerShell Scripts 
 
 #### Start the Server
 ```powershell
@@ -74,23 +75,32 @@ gcc -o client client.c -Wall
 ### Server
 1. Run the server script - it will start listening on port 3490
 2. Wait for client connections
-3. Once a client connects, you can type messages in the server terminal
-4. Messages are prefixed with "Client: " when received from the client
-5. Type `quit` to end the chat session with the current client
+3. When a client connects, they will be prompted for their username
+4. Once authenticated, the server displays the client's username with their messages
+5. You can type messages in the server terminal to send to the connected client
+6. Messages are prefixed with the client's username and include a timestamp
+7. Type `quit` to end the chat session with the current client
 
 ### Client
 1. Run the client script with the server hostname/IP
    - Examples: `localhost`, `127.0.0.1`, `192.168.1.100`
 2. You'll see a welcome message when connected
-3. Type messages to send to the server
-4. Messages from the server are prefixed with "Server: "
-5. Type `quit` to disconnect from the server
+3. Enter your name/identifier when prompted
+4. After authentication, you can type messages to send to the server
+5. Messages from the server are prefixed with "Server: " and include a timestamp
+6. Type `quit` to disconnect from the server
 
 ## Chat Commands
 
 - **quit** - End the chat session and disconnect
 
 ## Security Features
+
+### User Identification
+- Each client must provide a username/identifier upon connection
+- Username is encrypted during transmission
+- Server displays the username with each message for context
+- Helps identify participants in multi-client scenarios
 
 ### Message Encryption
 - All messages are encrypted using XOR cipher before transmission
