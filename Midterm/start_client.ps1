@@ -8,7 +8,7 @@ param(
     [string]$ServerHost = "localhost"
 )
 
-Write-Host "=== Chat Client Startup ===" -ForegroundColor Cyan
+Write-Host "=== Chat Client Startup ===" -ForegroundColor DarkGreen
 Write-Host ""
 
 # Check if we're on Windows with WSL or need to use a Linux environment

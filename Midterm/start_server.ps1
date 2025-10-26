@@ -1,7 +1,7 @@
 # Chat Server Startup Script
 # This script compiles and runs the chat server
 
-Write-Host "=== Chat Server Startup ===" -ForegroundColor Cyan
+Write-Host "=== Chat Server Startup ===" -ForegroundColor DarkGreen
 Write-Host ""
 
 # Check if we're on Windows with WSL or need to use a Linux environment
