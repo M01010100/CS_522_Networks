@@ -175,11 +175,8 @@ int main(int argc, char *argv[])
 			// Decrypt the received message
 			xor_encrypt_decrypt(buf, numbytes, ENCRYPTION_KEY);
 			
-			// Get timestamp
-			char timestamp[64];
-			get_timestamp(timestamp, sizeof(timestamp));
-			
-			printf("%s Server: %s", timestamp, buf);
+			// Display the message (already includes timestamp and username from server)
+			printf("%s", buf);
 			fflush(stdout);
 		}
 		
