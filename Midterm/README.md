@@ -1,15 +1,16 @@
 <!-- filepath: c:\Users\matth\Classes\CS_522_Networks\Midterm\README.md -->
 # Terminal-Based Chat Relay System
 
-A simple bidirectional chat application using TCP sockets in C. This allows real-time text communication between a server and multiple clients.
+A bidirectional chat application using TCP sockets in C. This allows real-time text communication between a server and multiple clients in a chat room style - messages from any client are broadcast to all other connected clients.
 
 ## Features
 
-- **Bidirectional Communication**: Both server and client can send and receive messages simultaneously
-- **Multiple Clients**: Server uses fork() to handle multiple client connections concurrently
+- **Chat Room Broadcast**: Messages from any client are broadcast to all other connected clients
+- **Multiple Concurrent Clients**: Server uses `select()` to handle up to 10 simultaneous client connections
 - **User Identification**: Clients provide a username/identifier when connecting
 - **Message Encryption**: XOR-based encryption for secure message transmission
 - **Timestamps**: Each received message is displayed with a timestamp showing when it was received
+- **Join/Leave Notifications**: All users are notified when someone joins or leaves the chat
 - **Simple Terminal Interface**: Type messages directly in the terminal
 - **Connection Management**: Graceful handling of disconnections and quit commands
 - **Cross-platform Scripts**: PowerShell and batch file support for easy compilation and execution
@@ -75,20 +76,22 @@ gcc -o client client.c -Wall
 ### Server
 1. Run the server script - it will start listening on port 3490
 2. Wait for client connections
-3. When a client connects, they will be prompted for their username
-4. Once authenticated, the server displays the client's username with their messages
-5. You can type messages in the server terminal to send to the connected client
-6. Messages are prefixed with the client's username and include a timestamp
-7. Type `quit` to end the chat session with the current client
+3. When clients connect and provide usernames, they enter a chat room
+4. The server displays all chat activity with usernames and timestamps
+5. The server monitors and logs all messages but does not send messages itself
+6. Users are notified when others join or leave the chat
+7. Press Ctrl+C to shut down the server
 
 ### Client
 1. Run the client script with the server hostname/IP
    - Examples: `localhost`, `127.0.0.1`, `192.168.1.100`
 2. You'll see a welcome message when connected
 3. Enter your name/identifier when prompted
-4. After authentication, you can type messages to send to the server
-5. Messages from the server are prefixed with "Server: " and include a timestamp
-6. Type `quit` to disconnect from the server
+4. After authentication, you enter a chat room with other connected users
+5. Messages you type are broadcast to all other connected clients
+6. You'll see messages from other users with their usernames and timestamps
+7. You'll be notified when other users join or leave
+8. Type `quit` to disconnect from the server
 
 ## Chat Commands
 
@@ -145,30 +148,34 @@ gcc -o client client.c -Wall
 ### Server Operation
 1. Creates a socket and binds to port 3490
 2. Listens for incoming connections
-3. When a client connects, forks a child process to handle that client
-4. Uses `select()` to monitor both stdin and the socket simultaneously
-5. Relays messages bidirectionally until either side types "quit" or disconnects
+3. Uses `select()` to monitor all client connections simultaneously (single-process, non-blocking)
+4. Maintains a list of up to 10 connected clients with their usernames
+5. When a message arrives from any client, broadcasts it to all other connected clients
+6. Handles client disconnections and notifies remaining users
 
 ### Client Operation
 1. Connects to the specified server hostname/IP on port 3490
 2. Receives welcome message from server
-3. Uses `select()` to monitor both stdin and the socket simultaneously
-4. Sends user input to server and displays received messages
-5. Maintains connection until "quit" is typed or server disconnects
+3. Sends username to server for identification
+4. Uses `select()` to monitor both stdin and the socket simultaneously
+5. Sends user input to server, which broadcasts to all other clients
+6. Displays received messages from other users with timestamps
+7. Maintains connection until "quit" is typed or server disconnects
 
 ## Technical Notes
 
 ### select() System Call
 Both server and client use `select()` with file descriptor sets to enable non-blocking I/O:
-- Monitors stdin for user input
-- Monitors socket for incoming network data
-- Allows simultaneous send/receive without threads
+- **Server**: Monitors listener socket + all connected client sockets
+- **Client**: Monitors stdin for user input + socket for incoming messages
+- Allows simultaneous handling of multiple connections/events without threads
 
-### Process Model
-- Server uses `fork()` to create a child process for each client
-- Parent continues accepting new connections
-- Child handles bidirectional communication with one client
-- `SIGCHLD` handler prevents zombie processes
+### Server Architecture
+- **Single-process design**: Uses `select()` instead of `fork()` for scalability
+- Maintains array of up to 10 active client connections
+- Tracks username for each connected client
+- Broadcasts messages from one client to all others
+- No inter-process communication needed (all in one process)
 
 ## Troubleshooting
 
