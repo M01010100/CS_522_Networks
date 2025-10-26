@@ -10,12 +10,31 @@
 #include <sys/types.h> 
 #include <netinet/in.h> 
 #include <sys/socket.h> 
+#include <time.h> 
 
 #include <arpa/inet.h> 
 
 #define PORT "3490" // the port client will be connecting to 
 
 #define MAXDATASIZE 1024 // max number of bytes we can get at once 
+
+// Encryption key - must match server
+#define ENCRYPTION_KEY "NetworksCS522Key"
+
+// Simple XOR encryption/decryption function
+void xor_encrypt_decrypt(char *data, int length, const char *key) {
+	int key_len = strlen(key);
+	for (int i = 0; i < length; i++) {
+		data[i] ^= key[i % key_len];
+	}
+}
+
+// Get current timestamp as string
+void get_timestamp(char *buffer, size_t size) {
+	time_t now = time(NULL);
+	struct tm *t = localtime(&now);
+	strftime(buffer, size, "[%Y-%m-%d %H:%M:%S]", t);
+}
 
 // get sockaddr, IPv4 or IPv6: 
 void *get_in_addr(struct sockaddr *sa) 
@@ -120,7 +139,15 @@ int main(int argc, char *argv[])
 				break;
 			}
 			buf[numbytes] = '\0';
-			printf("Server: %s", buf);
+			
+			// Decrypt the received message
+			xor_encrypt_decrypt(buf, numbytes, ENCRYPTION_KEY);
+			
+			// Get timestamp
+			char timestamp[64];
+			get_timestamp(timestamp, sizeof(timestamp));
+			
+			printf("%s Server: %s", timestamp, buf);
 			fflush(stdout);
 		}
 		
@@ -130,12 +157,18 @@ int main(int argc, char *argv[])
 				// Check if user wants to quit
 				if (strncmp(buf, "quit", 4) == 0) {
 					printf("Ending chat session\n");
+					// Encrypt before sending
+					xor_encrypt_decrypt(buf, strlen(buf), ENCRYPTION_KEY);
 					send(sockfd, buf, strlen(buf), 0);
 					break;
 				}
 				
-				// Send message to server
-				if (send(sockfd, buf, strlen(buf), 0) == -1) {
+				int msg_len = strlen(buf);
+				// Encrypt the message before sending
+				xor_encrypt_decrypt(buf, msg_len, ENCRYPTION_KEY);
+				
+				// Send encrypted message to server
+				if (send(sockfd, buf, msg_len, 0) == -1) {
 					perror("send");
 					break;
 				}

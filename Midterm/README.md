@@ -6,6 +6,8 @@ A simple bidirectional chat application using TCP sockets in C. This allows real
 
 - **Bidirectional Communication**: Both server and client can send and receive messages simultaneously
 - **Multiple Clients**: Server uses fork() to handle multiple client connections concurrently
+- **Message Encryption**: XOR-based encryption for secure message transmission
+- **Timestamps**: Each received message is displayed with a timestamp showing when it was received
 - **Simple Terminal Interface**: Type messages directly in the terminal
 - **Connection Management**: Graceful handling of disconnections and quit commands
 - **Cross-platform Scripts**: PowerShell and batch file support for easy compilation and execution
@@ -98,6 +100,22 @@ gcc -o client client.c -Wall
 
 - **quit** - End the chat session and disconnect
 
+## Security Features
+
+### Message Encryption
+- All messages are encrypted using XOR cipher before transmission
+- Encryption key is shared between client and server (defined in source code)
+- Key: `NetworksCS522Key`
+- Both client and server automatically encrypt outgoing messages and decrypt incoming messages
+- Provides basic confidentiality for chat messages over the network
+
+### Timestamps
+- Each received message is automatically timestamped
+- Timestamp format: `[YYYY-MM-DD HH:MM:SS]`
+- Example: `[2025-10-25 14:30:45] Server: Hello!`
+- Timestamps show when messages were received, not when they were sent
+- Helps track conversation flow and message timing
+
 ## Network Details
 
 - **Port**: 3490 (defined in both server.c and client.c)
@@ -177,11 +195,13 @@ Install WSL: `wsl --install` in PowerShell (admin), then restart your computer.
 Possible enhancements:
 - Add username/authentication
 - Implement chat rooms (multiple clients in one session)
-- Add message encryption
+- Upgrade to stronger encryption (AES, RSA)
+- Add digital signatures for message authentication
 - Implement file transfer
 - Add message history/logging
 - Create a GUI interface
-- Add timestamp to messages
+- Add sent timestamp in addition to received timestamp
+- Implement key exchange protocol for dynamic keys
 
 ## Port Configuration
 

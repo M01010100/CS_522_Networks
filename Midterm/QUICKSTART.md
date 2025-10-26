@@ -139,7 +139,7 @@ Then restart your computer.
 ## Architecture
 
 ```
-┌─────────────────┐         TCP          ┌─────────────────┐
+┌─────────────────┐         TCP           ┌─────────────────┐
 │     SERVER      │◄─────────────────────►│     CLIENT      │
 │   Port 3490     │    Socket Connection  │                 │
 │                 │                       │                 │

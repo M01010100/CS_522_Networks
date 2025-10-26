@@ -13,10 +13,29 @@
 #include <arpa/inet.h> 
 #include <sys/wait.h> 
 #include <signal.h> 
+#include <time.h> 
 
 #define PORT "3490" // the port users will be connecting to 
 
 #define BACKLOG 10	 // how many pending connections queue will hold 
+
+// Encryption key - must match client
+#define ENCRYPTION_KEY "NetworksCS522Key"
+
+// Simple XOR encryption/decryption function
+void xor_encrypt_decrypt(char *data, int length, const char *key) {
+	int key_len = strlen(key);
+	for (int i = 0; i < length; i++) {
+		data[i] ^= key[i % key_len];
+	}
+}
+
+// Get current timestamp as string
+void get_timestamp(char *buffer, size_t size) {
+	time_t now = time(NULL);
+	struct tm *t = localtime(&now);
+	strftime(buffer, size, "[%Y-%m-%d %H:%M:%S]", t);
+}
 
 void sigchld_handler(int s) 
 { 
@@ -163,13 +182,20 @@ int main(void)
 					}
 					buf[numbytes] = '\0';
 					
+					// Decrypt the received message
+					xor_encrypt_decrypt(buf, numbytes, ENCRYPTION_KEY);
+					
 					// Check if client wants to quit
 					if (strncmp(buf, "quit", 4) == 0) {
 						printf("Client ended the chat\n");
 						break;
 					}
 					
-					printf("Client: %s", buf);
+					// Get timestamp
+					char timestamp[64];
+					get_timestamp(timestamp, sizeof(timestamp));
+					
+					printf("%s Client: %s", timestamp, buf);
 					fflush(stdout);
 				}
 				
@@ -179,12 +205,19 @@ int main(void)
 						// Check if server wants to quit
 						if (strncmp(buf, "quit", 4) == 0) {
 							printf("Ending chat session\n");
-							send(new_fd, "Server has ended the chat.\n", 27, 0);
+							char quit_msg[] = "Server has ended the chat.\n";
+							// Encrypt quit message
+							xor_encrypt_decrypt(quit_msg, strlen(quit_msg), ENCRYPTION_KEY);
+							send(new_fd, quit_msg, strlen(quit_msg), 0);
 							break;
 						}
 						
-						// Send message to client
-						if (send(new_fd, buf, strlen(buf), 0) == -1) {
+						int msg_len = strlen(buf);
+						// Encrypt the message before sending
+						xor_encrypt_decrypt(buf, msg_len, ENCRYPTION_KEY);
+						
+						// Send encrypted message to client
+						if (send(new_fd, buf, msg_len, 0) == -1) {
 							perror("send");
 							break;
 						}
