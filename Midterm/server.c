@@ -145,18 +145,18 @@ int main(void)
 	hints.ai_family = AF_UNSPEC;
 	hints.ai_socktype = SOCK_STREAM;
 	hints.ai_flags = AI_PASSIVE;
-	
+	// Get address info
 	if ((rv = getaddrinfo(NULL, PORT, &hints, &ai)) != 0) {
 		fprintf(stderr, "selectserver: %s\n", gai_strerror(rv));
 		exit(1);
 	}
-	
+	// Bind to the first available address
 	for(p = ai; p != NULL; p = p->ai_next) {
 		listener = socket(p->ai_family, p->ai_socktype, p->ai_protocol);
 		if (listener < 0) { 
 			continue;
 		}
-		
+		// Allow reuse of the address
 		setsockopt(listener, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(int));
 		
 		if (bind(listener, p->ai_addr, p->ai_addrlen) < 0) {
@@ -166,7 +166,7 @@ int main(void)
 		
 		break;
 	}
-	
+	// Check if bind was successful
 	if (p == NULL) {
 		fprintf(stderr, "selectserver: failed to bind\n");
 		exit(2);

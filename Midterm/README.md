@@ -202,20 +202,39 @@ To change the port, modify the `PORT` definition in both files:
 
 ### Architecture Overview
 
-This chat application follows a client-server architecture with the following key design decisions:
+This chat application follows a **client-server broadcast architecture** with the following key design decisions:
 
-#### **Multi-Process Model (Server)**
-- Uses `fork()` to spawn a child process for each client connection
-- Parent process continues accepting new connections
-- Child process handles bidirectional communication with one specific client
-- Avoids threading complexity while supporting multiple concurrent clients
+#### **Single-Process Broadcast Server**
+- Uses `select()` to handle multiple clients in a single process
+- Maintains an array of all connected clients (up to 10 concurrent connections)
+- Broadcasts messages from one client to all other connected clients
+- More scalable than fork-based approach (no process overhead per client)
+- All clients share the same process memory space
 
 #### **Non-Blocking I/O with select()**
-- Both client and server use `select()` system call for event-driven I/O
-- Monitors multiple file descriptors simultaneously without blocking
-- Eliminates need for multithreading on the client side
+- Server uses `select()` to monitor listener socket + all client sockets simultaneously
+- Client uses `select()` to monitor stdin (keyboard) and socket (network) simultaneously
+- Event-driven architecture: only processes data when available
+- No busy-waiting or polling needed
 
 ### Server Implementation (`server.c`)
+
+#### **Client Management Structure**
+```c
+typedef struct {
+    int fd;                      // Client socket file descriptor
+    char username[64];           // Client's chosen username
+    struct sockaddr_storage addr; // Client's network address
+} client_t;
+
+client_t clients[MAX_CLIENTS];   // Array of connected clients
+int client_count = 0;            // Current number of clients
+```
+**Design Rationale:**
+- Fixed-size array for simplicity (production would use dynamic list)
+- Stores username for message attribution
+- Tracks socket FD for sending/receiving
+- No mutex needed (single-threaded)
 
 #### **Socket Setup and Binding**
 ```c
@@ -228,59 +247,94 @@ listen(sockfd, BACKLOG);
 - `AI_PASSIVE` flag allows binding to any available interface
 - `BACKLOG` of 10 allows queue of pending connections
 
-#### **Connection Handling**
+#### **Connection Handling with select()**
 ```c
+FD_SET(listener, &master);  // Add listener to master set
+fdmax = listener;
+
 while(1) {
-    new_fd = accept(sockfd, (struct sockaddr *)&their_addr, &sin_size);
-    if (!fork()) {  // Child process
-        close(sockfd);  // Child doesn't need listener
-        // Handle client communication
-        exit(0);
+    read_fds = master;  // Copy master to working set
+    select(fdmax+1, &read_fds, NULL, NULL, NULL);
+    
+    for(i = 0; i <= fdmax; i++) {
+        if (FD_ISSET(i, &read_fds)) {
+            if (i == listener) {
+                // New connection - accept and add to master set
+                newfd = accept(listener, ...);
+                FD_SET(newfd, &master);
+            } else {
+                // Data from existing client - receive and broadcast
+                recv(i, buf, sizeof(buf), 0);
+                broadcast_message(buf, i, username);
+            }
+        }
     }
-    close(new_fd);  // Parent doesn't need this connection
 }
 ```
-**Key Points:**
-- `accept()` blocks until a client connects
-- `fork()` creates child process; returns 0 in child, PID in parent
-- Child closes listener socket (only parent accepts new connections)
-- Parent closes client socket (only child communicates with client)
-- Child exits when client disconnects, preventing zombie processes via `SIGCHLD` handler
+**Key Design Decisions:**
+- **Master set**: Persistent list of all file descriptors to monitor
+- **Working set**: Copied each iteration (select modifies it)
+- **Single loop**: Handles both new connections and existing client data
+- **No forking**: All clients handled in same process
+- **Scalability**: Can handle multiple clients with minimal overhead
 
-#### **Signal Handling**
+**Advantages over fork() approach:**
+- ✅ Lower memory usage (no separate process per client)
+- ✅ Easier state sharing (all clients in same array)
+- ✅ No zombie processes to manage
+- ✅ Simpler inter-client communication (just loop through array)
+- ✅ Better for broadcast scenarios
+
+#### **Broadcast Mechanism**
 ```c
-void sigchld_handler(int s) {
-    int saved_errno = errno;
-    while(waitpid(-1, NULL, WNOHANG) > 0);
-    errno = saved_errno;
+void broadcast_message(const char *message, int sender_fd, const char *sender_name) {
+    char buf[MAXDATASIZE];
+    char timestamp[64];
+    get_timestamp(timestamp, sizeof(timestamp));
+    
+    // Format: [timestamp] Username: message
+    snprintf(buf, sizeof(buf), "%s %s: %s", timestamp, sender_name, message);
+    
+    int msg_len = strlen(buf);
+    xor_encrypt_decrypt(buf, msg_len, ENCRYPTION_KEY);
+    
+    // Send to all clients except sender
+    for (int i = 0; i < client_count; i++) {
+        if (clients[i].fd != sender_fd && clients[i].fd != -1) {
+            send(clients[i].fd, buf, msg_len, 0);
+        }
+    }
 }
 ```
-**Purpose:**
-- Reaps zombie child processes automatically
-- `WNOHANG` prevents blocking if no children have exited
-- Preserves `errno` to avoid side effects in signal handler
+**Implementation Notes:**
+- Server adds timestamp (clients display as-is)
+- Includes sender's username for attribution
+- Encrypts once, sends to multiple clients
+- Skips sender (no echo-back)
+- Skips invalid file descriptors (-1)
 
-#### **Bidirectional Communication Loop**
+#### **Client Lifecycle Management**
 ```c
-FD_ZERO(&readfds);
-FD_SET(STDIN_FILENO, &readfds);  // Monitor keyboard input
-FD_SET(new_fd, &readfds);         // Monitor socket data
-
-select(new_fd + 1, &readfds, NULL, NULL, NULL);
-
-if (FD_ISSET(STDIN_FILENO, &readfds)) {
-    // User typed something - read and send
+// Add client
+int add_client(int fd, struct sockaddr_storage *addr) {
+    clients[client_count].fd = fd;
+    clients[client_count].username[0] = '\0';  // Empty until received
+    client_count++;
 }
-if (FD_ISSET(new_fd, &readfds)) {
-    // Data received from client - read and display
+
+// Remove client (shift array down)
+void remove_client(int index) {
+    for (int i = index; i < client_count - 1; i++) {
+        clients[i] = clients[i + 1];
+    }
+    client_count--;
 }
 ```
-**How select() Works:**
-- `FD_ZERO` clears the file descriptor set
-- `FD_SET` adds file descriptors to monitor
-- `select()` blocks until one or more FDs have activity
-- `FD_ISSET` checks which FD triggered the wake-up
-- First parameter must be `max_fd + 1` for proper monitoring
+**Design Considerations:**
+- Simple array-based storage (no linked list complexity)
+- Username initially empty, set after first message
+- Remove shifts array to maintain contiguity
+- O(n) removal acceptable for small MAX_CLIENTS (10)
 
 ### Client Implementation (`client.c`)
 
@@ -300,30 +354,70 @@ for(p = servinfo; p != NULL; p = p->ai_next) {
 - Falls back if first connection attempt fails
 - Validates successful connection before proceeding
 
-#### **Welcome Message Reception**
+#### **Username Authentication Flow**
 ```c
-numbytes = recv(sockfd, buf, MAXDATASIZE-1, 0);
-buf[numbytes] = '\0';
-printf("%s\n", buf);
+// 1. Receive welcome message
+recv(sockfd, buf, MAXDATASIZE-1, 0);
+printf("%s", buf);
+
+// 2. Prompt for username
+printf("Enter your name/identifier: ");
+fgets(username, sizeof(username), stdin);
+username[strcspn(username, "\n")] = '\0';  // Remove newline
+
+// 3. Send encrypted username
+xor_encrypt_decrypt(username, username_len, ENCRYPTION_KEY);
+send(sockfd, username, username_len, 0);
+
+// 4. Wait for acknowledgment
+recv(sockfd, buf, MAXDATASIZE-1, 0);
+xor_encrypt_decrypt(buf, numbytes, ENCRYPTION_KEY);
+printf("%s\n", buf);  // "Welcome, Alice! You are now connected..."
 ```
-**Best Practices:**
-- Null-terminates received data before printing
-- Leaves room in buffer (`MAXDATASIZE-1`) for null terminator
-- Checks `numbytes` to handle disconnection gracefully
+**Security Note:**
+- Username transmitted encrypted (not plaintext)
+- Server validates and acknowledges
+- Two-way handshake ensures connection established
+
+#### **Client Message Loop**
+```c
+FD_SET(STDIN_FILENO, &master_fds);  // Monitor keyboard
+FD_SET(sockfd, &master_fds);         // Monitor server
+
+while(1) {
+    select(fdmax + 1, &read_fds, NULL, NULL, NULL);
+    
+    if (FD_ISSET(sockfd, &read_fds)) {
+        // Server sent data - receive, decrypt, display
+        recv(sockfd, buf, MAXDATASIZE - 1, 0);
+        xor_encrypt_decrypt(buf, numbytes, ENCRYPTION_KEY);
+        printf("%s", buf);  // Already includes timestamp from server
+    }
+    
+    if (FD_ISSET(STDIN_FILENO, &read_fds)) {
+        // User typed - read, encrypt, send
+        fgets(buf, MAXDATASIZE, stdin);
+        xor_encrypt_decrypt(buf, msg_len, ENCRYPTION_KEY);
+        send(sockfd, buf, msg_len, 0);
+    }
+}
+```
+**Key Points:**
+- Client doesn't add timestamp (server does)
+- Symmetric design: encrypt before send, decrypt after receive
+- Quit command detected before encryption
 
 ### Encryption Implementation
 
 #### **XOR Cipher Function**
 ```c
-void xor_encrypt_decrypt(char *data, int len) {
-    const char *key = "NetworksCS522Key";
+void xor_encrypt_decrypt(char *data, int len, const char *key) {
     int key_len = strlen(key);
     
     for (int i = 0; i < len; i++) {
         data[i] ^= key[i % key_len];
     }
 }
-```
 **How It Works:**
 - **Symmetric**: Same function encrypts and decrypts (XOR property: `A XOR B XOR B = A`)
 - **Byte-by-byte**: Each character XORed with corresponding key character
@@ -338,15 +432,16 @@ void xor_encrypt_decrypt(char *data, int len) {
 
 #### **Encryption in Practice**
 ```c
-// Before sending
-xor_encrypt_decrypt(buf, strlen(buf));
+// Before sending (client or server)
+xor_encrypt_decrypt(buf, strlen(buf), ENCRYPTION_KEY);
 send(sockfd, buf, strlen(buf), 0);
 
-// After receiving
+// After receiving (client or server)
 numbytes = recv(sockfd, buf, MAXDATASIZE-1, 0);
-xor_encrypt_decrypt(buf, numbytes);
+xor_encrypt_decrypt(buf, numbytes, ENCRYPTION_KEY);
 buf[numbytes] = '\0';
 ```
+
 ### Timestamp Implementation
 
 #### **Timestamp Generation**
@@ -361,18 +456,20 @@ void get_timestamp(char *buffer, size_t size) {
 - `time(NULL)`: Gets current Unix timestamp (seconds since 1970)
 - `localtime()`: Converts to local timezone broken-down time
 - `strftime()`: Formats time into human-readable string
-- ISO 8601-style format: `YYYY-MM-DD HH:MM:SS`
+- ISO 8601-style format: `[YYYY-MM-DD HH:MM:SS]`
 
-#### **Timestamp Usage**
+#### **Timestamp Application**
 ```c
-char timestamp[32];
+// Server adds timestamp when broadcasting
+char timestamp[64];
 get_timestamp(timestamp, sizeof(timestamp));
-printf("%s Server: %s", timestamp, buf);
+snprintf(buf, sizeof(buf), "%s %s: %s", timestamp, sender_name, message);
 ```
 **Design Choices:**
-- Fixed 32-byte buffer (sufficient for timestamp format)
-- Prepended to messages for consistent appearance
-- Shows **receive time**, not send time (client clock used)
+- **Server-side only**: Server adds timestamp, clients display as-is
+- **Single timestamp**: Prevents duplicate timestamps
+- **Broadcast time**: Shows when message was relayed, not sent
+- Fixed 64-byte buffer (sufficient for timestamp format)
 
 ### Buffer Management
 
@@ -435,22 +532,48 @@ if (sockfd == -1) {
 
 #### **Why select() Instead of Threading?**
 1. **Lower Overhead**: No context switching between threads
-2. **Simpler Synchronization**: No mutexes or race conditions
-3. **Resource Efficient**: Single thread monitors multiple I/O sources
+2. **Simpler Synchronization**: No mutexes or race conditions needed
+3. **Resource Efficient**: Single process monitors multiple I/O sources
 4. **Suitable for I/O-Bound**: Chat apps spend most time waiting for network/keyboard
+5. **Deterministic**: Easy to debug and reason about behavior
 
-#### **Process vs Thread Model**
-**Server uses processes (fork()):**
+#### **Single-Process vs Multi-Process Model**
+**Current Server (select-based, single-process):**
+- ✅ Very low memory overhead (one process total)
+- ✅ Easy state sharing (all clients in same array)
+- ✅ No inter-process communication needed
+- ✅ No zombie processes to manage
+- ✅ Perfect for broadcast scenarios
+- ⚠️ One process failure kills all clients
+
+**Alternative (fork-based, multi-process):**
 - ✅ Complete isolation between clients
-- ✅ Crash in one client doesn't affect others
-- ✅ Simple memory management (no shared state)
-- ⚠️ Higher memory overhead per client
-- ⚠️ More expensive context switches
+- ✅ Crash in one child doesn't affect others
+- ⚠️ Higher memory overhead per client (~1-2MB each)
+- ⚠️ Requires IPC for client-to-client messages
+- ⚠️ Zombie process management needed
 
-**Client uses single process:**
-- ✅ Lightweight (one connection per client)
+**Client (select-based, single-process):**
+- ✅ Lightweight (one connection only)
 - ✅ No inter-thread communication needed
-- ✅ `select()` provides pseudo-concurrency
+- ✅ `select()` provides pseudo-concurrency for I/O
+
+#### **Scalability Analysis**
+**Current Limits:**
+- Max 10 concurrent clients (`MAX_CLIENTS`)
+- Max 1024 bytes per message (`MAXDATASIZE`)
+- Max ~1000 file descriptors (OS limit)
+
+**Bottlenecks:**
+- Broadcast O(n) for each message
+- Single-threaded (one CPU core)
+- No message queueing
+
+**Production Improvements:**
+- Use `epoll()` (Linux) or `kqueue()` (BSD) for >1000 clients
+- Thread pool for CPU-intensive operations
+- Message queue for non-blocking sends
+- Rate limiting per client
 
 ### Code Quality Observations
 
@@ -459,28 +582,35 @@ if (sockfd == -1) {
 - ✅ Consistent error handling patterns
 - ✅ Protocol-independent (IPv4/IPv6 compatible)
 - ✅ Graceful shutdown on quit command
-- ✅ Prevents zombie processes with signal handler
+- ✅ No zombie processes (no fork, no SIGCHLD needed)
+- ✅ Client management abstracted (add/remove/find functions)
+- ✅ Broadcast mechanism centralized
+- ✅ Username authentication on connection
 
 #### **Areas for Enhancement**
-- ⚠️ Hardcoded encryption key (consider key exchange)
-- ⚠️ No message framing (1024-byte limit per message)
-- ⚠️ XOR cipher is weak (upgrade to AES/TLS)
-- ⚠️ No authentication (anyone can connect)
-- ⚠️ No logging of conversations
-- ⚠️ Single-threaded server (blocking on stdin affects all clients)
+- ⚠️ Hardcoded encryption key (should use Diffie-Hellman key exchange)
+- ⚠️ No message framing (1024-byte limit, could fragment)
+- ⚠️ XOR cipher is weak (upgrade to AES-256-CBC or TLS)
+- ⚠️ No user authentication (anyone can connect with any username)
+- ⚠️ No duplicate username prevention
+- ⚠️ No message logging or history
+- ⚠️ No rate limiting (flood attacks possible)
+- ⚠️ Fixed array size (MAX_CLIENTS = 10)
+- ⚠️ No message acknowledgments
 
 ### Memory Management
 
 #### **Resource Cleanup**
 ```c
-freeaddrinfo(servinfo);  // Free address list
-close(sockfd);           // Release socket file descriptor
-exit(0);                 // Cleanup on child exit
+freeaddrinfo(ai);        // Free address list from getaddrinfo()
+close(listener);         // Release listener socket
+close(clients[i].fd);    // Release client sockets
 ```
 **Leak Prevention:**
 - `getaddrinfo()` allocates memory that must be freed
-- Socket file descriptors must be closed
-- Child processes exit cleanly to release all resources
+- Socket file descriptors must be closed on disconnect
+- Master FD set managed automatically (stack allocated)
+- No dynamic allocation in main loop (clients[] is static array)
 - OS reclaims memory on process termination
 
 #### **File Descriptor Limits**
@@ -493,21 +623,42 @@ exit(0);                 // Cleanup on child exit
 
 #### **Test Scenarios**
 1. **Single Client**: Basic send/receive functionality
-2. **Multiple Clients**: Concurrent connections, no interference
-3. **Rapid Disconnect**: Client quits immediately after connecting
-4. **Long Messages**: Test 1024-byte boundary
-5. **Special Characters**: Verify encryption handles all bytes
-6. **Server Restart**: Client should detect disconnection
+2. **Multiple Clients (2-10)**: Concurrent connections, message broadcasting
+3. **Client Join/Leave**: Verify notifications broadcast correctly
+4. **Rapid Disconnect**: Client quits immediately after connecting
+5. **Long Messages**: Test 1024-byte boundary behavior
+6. **Special Characters**: Verify encryption handles all bytes (including newlines)
+7. **Server Restart**: Clients should detect disconnection
+8. **Network Latency**: Works on slow/high-latency connections?
+9. **Username Collision**: Two clients with same username
+10. **Max Clients**: 11th client should be rejected with "Server is full" message
 7. **Network Latency**: Works on slow connections?
 
 #### **Debugging Tips**
 ```c
-// Add verbose logging
-printf("DEBUG: Received %d bytes\n", numbytes);
+// Add verbose logging to server
+printf("DEBUG: Received %d bytes from client %d (%s)\n", 
+       nbytes, i, clients[find_client(i)].username);
 
-// Dump encrypted data
-for (int i = 0; i < numbytes; i++)
-    printf("%02x ", (unsigned char)buf[i]);
+// Dump encrypted data (hex)
+for (int j = 0; j < nbytes; j++)
+    printf("%02x ", (unsigned char)buf[j]);
+printf("\n");
+
+// Track client count
+printf("DEBUG: Current client count: %d\n", client_count);
+```
+
+**Useful Commands:**
+```bash
+# Monitor network traffic
+sudo tcpdump -i lo port 3490 -A
+
+# Check open connections
+netstat -an | grep 3490
+
+# Test from command line
+telnet localhost 3490
 ```
 
 ### Protocol Limitations
@@ -515,17 +666,32 @@ for (int i = 0; i < numbytes; i++)
 #### **Message Boundaries**
 - No explicit message framing protocol
 - Relies on line-buffered input (`fgets()`)
-- Large messages could be fragmented by TCP
-- Consider adding length prefix for production use
+- TCP may fragment large messages across multiple `recv()` calls
+- Messages limited to 1024 bytes
+- Consider adding length prefix for production: `[4-byte length][payload]`
 
 #### **Wire Format**
 ```
-[Encrypted Payload]
+Client -> Server:
+  [Encrypted Username]           (on first message only)
+  [Encrypted Message]            (subsequent messages)
+
+Server -> Client:
+  [Encrypted Timestamp + Username + Message]
+
+Example encrypted packet:
+  0x4F 0x2A 0x1B ... (encrypted bytes)
 ```
 - No header, just encrypted content
-- No sequence numbers or checksums
-- Sender doesn't know if message arrived intact
+- No sequence numbers or checksums (relies on TCP)
+- Sender doesn't know if message was successfully broadcast
 - Consider adding application-level acknowledgments
+
+#### **Broadcasting Behavior**
+- Messages sent from Client A go to ALL other clients (B, C, D...)
+- Sender does NOT receive their own message (no echo)
+- Server shows message on console but doesn't send it back
+- Join/leave notifications sent to ALL clients except the one joining/leaving
 
 ## License
 

@@ -59,9 +59,9 @@ int main(int argc, char *argv[])
 	    exit(1); 
 	} 
 
-	memset(&hints, 0, sizeof hints); 
-	hints.ai_family = AF_UNSPEC; 
-	hints.ai_socktype = SOCK_STREAM; 
+	memset(&hints, 0, sizeof hints);  // prepare hints structure
+	hints.ai_family = AF_UNSPEC; // don't care IPv4 or IPv6
+	hints.ai_socktype = SOCK_STREAM; // TCP stream sockets
 
 	if ((rv = getaddrinfo(argv[1], PORT, &hints, &servinfo)) != 0) { 
 		fprintf(stderr, "getaddrinfo: %s\n", gai_strerror(rv)); 
@@ -75,11 +75,11 @@ int main(int argc, char *argv[])
 			perror("client: socket"); 
 			continue; 
 		} 
-
+// Convert the IP to a string and print it
 		inet_ntop(p->ai_family, get_in_addr((struct sockaddr *)p->ai_addr), 
 			s, sizeof s); 
 		printf("client: attempting connection to %s\n", s); 
-
+// Try to connect
 		if (connect(sockfd, p->ai_addr, p->ai_addrlen) == -1) { 
 			perror("client: connect"); 
 			close(sockfd); 
