@@ -182,25 +182,35 @@ int main(int argc, char *argv[])
 		
 		// Check if user typed something
 		if (FD_ISSET(STDIN_FILENO, &read_fds)) {
-			if (fgets(buf, MAXDATASIZE, stdin) != NULL) {
-				// Check if user wants to quit
-				if (strncmp(buf, "quit", 4) == 0) {
-					printf("Ending chat session\n");
-					// Encrypt before sending
-					xor_encrypt_decrypt(buf, strlen(buf), ENCRYPTION_KEY);
-					send(sockfd, buf, strlen(buf), 0);
-					break;
-				}
-				
-				int msg_len = strlen(buf);
-				// Encrypt the message before sending
-				xor_encrypt_decrypt(buf, msg_len, ENCRYPTION_KEY);
-				
-				// Send encrypted message to server
-				if (send(sockfd, buf, msg_len, 0) == -1) {
-					perror("send");
-					break;
-				}
+			// User typed something
+			char plaintext[MAXDATASIZE];
+			unsigned char ciphertext[MAXDATASIZE + 16];
+			
+			if (fgets(plaintext, MAXDATASIZE, stdin) == NULL) {
+				break;
+			}
+			
+			// Remove newline
+			plaintext[strcspn(plaintext, "\n")] = '\0';
+			
+			// Check for quit
+			if (strcmp(plaintext, "quit") == 0) {
+				printf("Disconnecting...\n");
+				break;
+			}
+			
+			// Encrypt and send
+			int plaintext_len = strlen(plaintext);
+			int ciphertext_len = aes_encrypt((unsigned char*)plaintext, plaintext_len, ciphertext);
+			
+			if (ciphertext_len < 0) {
+				fprintf(stderr, "Encryption failed\n");
+				continue;
+			}
+			
+			if (send(sockfd, ciphertext, ciphertext_len, 0) == -1) {
+				perror("send");
+				break;
 			}
 		}
 	}
